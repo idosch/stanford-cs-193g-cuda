@@ -54,8 +54,9 @@ void host_graph_iterate(unsigned int *graph_indices, unsigned int *graph_edges, 
   }
 }
 
-
 // TODO your kernel code here
+__global__ void device_graph_propagate(unsigned int *graph_indices, unsigned int *graph_edges, float *graph_nodes_in, float *graph_nodes_out, float * inv_edges_per_node, int array_length) {
+}
 
 
 
@@ -68,12 +69,37 @@ void device_graph_iterate(unsigned int *h_graph_indices,
                           int num_elements,
                           int avg_edges)
 {
-  // TODO all of your gpu memory allocation and copying to gpu memory has to be in this function
+  unsigned int *graph_indices;
+  unsigned int *graph_edges;
+  float *graph_nodes_in;
+  float *graph_nodes_out;
+  float *inv_edges_per_node;
+
+  cudaMalloc((void**)&graph_indices, (num_elements+1) * sizeof(unsigned int));
+  cudaMalloc((void**)&inv_edges_per_node, num_elements * sizeof(float));
+  cudaMalloc((void**)&graph_edges, num_elements * avg_edges * sizeof(unsigned int));
+  cudaMalloc((void**)&graph_nodes_in, num_elements * sizeof(float));
+  cudaMalloc((void**)&graph_nodes_out, num_elements * sizeof(float));
+
+  cudaMemcpy(graph_indices, h_graph_indices, (num_elements+1) * sizeof(unsigned int), cudaMemcpyHostToDevice);
+  cudaMemcpy(inv_edges_per_node, h_inv_edges_per_node, num_elements * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(graph_edges, h_graph_edges, num_elements * avg_edges * sizeof(unsigned int), cudaMemcpyHostToDevice);
+  cudaMemcpy(graph_nodes_in, h_graph_nodes_input, num_elements * sizeof(float));
+
+  int block_size = 512;
+  int grid_size = num_elements / block_size;
 
   start_timer(&timer);
+unsigned int *graph_indices, unsigned int *graph_edges, float *graph_nodes_in, float *graph_nodes_out, float * inv_edges_per_node, int array_length) {
+}
 
-  // TODO your device code should go here, so you can measure how long it takes
-  
+  assert((nr_iterations % 2) == 0);
+  for(int iter = 0; iter < nr_iterations; iter+=2)
+  {
+    device_graph_propagate(graph_indices, graph_edges, graph_nodes_A, graph_nodes_B, inv_edges_per_node, array_length);
+    device_graph_propagate(graph_indices, graph_edges, graph_nodes_B, graph_nodes_A, inv_edges_per_node, array_length);
+  }
+   
   check_launch("gpu graph propagate");
   stop_timer(&timer,"gpu graph propagate");
 
