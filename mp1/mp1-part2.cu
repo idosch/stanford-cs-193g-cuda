@@ -23,7 +23,7 @@ const int maxUlps = 1000;
 
 event_pair timer;
   
-float4 force_calc(float4 A, float4 B) 
+__host__ __device__ float4 force_calc(float4 A, float4 B) 
 {
   float x = B.x - A.x;
   float y = B.y - A.y;
@@ -57,26 +57,53 @@ void host_force_eval(float4 *set_A, float4 *set_B, int * indices, float4 *force_
 }
 
 
-__global__ void force_eval(float4 *set_A, float4 *set_B, int * indices, float4 *force_vectors, int array_length)
-{
-  // TODO your code here ...
+__global__ void force_eval(float4 *set_A, float4 *set_B, int * indices, float4 *force_vectors, int array_length) {
+  int index = blockDim.x * blockIdx.x + threadIdx.x;
+
+  if (indices[index] < array_length && indices[index] >=0) {
+    force_vectors[index] = force_calc(set_A[index], set_B[indices[index]]);
+  } else {
+    force_vectors[index] = make_float4(0.0, 0.0, 0.0, 0.0);
+  }
 }
 
 
 
-void host_charged_particles(float4 *h_set_A, float4 *h_set_B, int *h_indices, float4 *h_force_vectors, int num_elements)
-{ 
-  // TODO your code here ...
-  
+void host_charged_particles(float4 *h_set_A, float4 *h_set_B, int *h_indices, float4 *h_force_vectors, int num_elements) {
+  float4 *set_A;
+  float4 *set_B;
+  float4 *force_vectors; 
+  int *indices; // mapping between particles
+
+  // allocate mmeory on the gpu
+  cudaMalloc((void**)&set_A, sizeof(float4) * num_elements);
+  cudaMalloc((void**)&set_B, sizeof(float4) * num_elements);
+  cudaMalloc((void**)&force_vectors, sizeof(float4) * num_elements);
+  cudaMalloc((void**)&indices, sizeof(int) * num_elements);
+
+  int block_size = 512;
+  int grid_size = num_elements / block_size;
+
   start_timer(&timer);
+  // copy arrays from host to device
+  cudaMemcpy(set_A, h_set_A, sizeof(float4) * num_elements, cudaMemcpyHostToDevice);
+  cudaMemcpy(set_B, h_set_B, sizeof(float4) * num_elements, cudaMemcpyHostToDevice);
+  cudaMemcpy(indices, h_indices, sizeof(int) * num_elements, cudaMemcpyHostToDevice);
+
   // launch kernel
-  
-  // the actual kernel launch should go here, so that the time it took is measured 
+  force_eval<<<grid_size, block_size>>>(set_A, set_B, indices, force_vectors, num_elements);
+
+  // copy result from device to host
+  cudaMemcpy(h_force_vectors, force_vectors, sizeof(float4) * num_elements, cudaMemcpyDeviceToHost);
 
   check_launch("gpu force eval");
   stop_timer(&timer,"gpu force eval");
-  
-  // TODO more code here...
+
+  // deallocate memory
+  cudaFree(set_A);
+  cudaFree(set_B);
+  cudaFree(force_vectors);
+  cudaFree(indices);
 }
 
 
