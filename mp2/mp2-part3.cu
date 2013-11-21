@@ -17,22 +17,6 @@
  *
  */
  
-/*
- * SUBMISSION INSTRUCTIONS
- * =========================
- * 
- * You can submit the assignment from any of the cluster machines by using
- * our submit script. Th submit script bundles the entire current directory into
- * a submission. Thus, you use it by CDing to a the directory for your assignment,
- * and running:
- * 
- *   > cd *some directory*
- *   > /usr/class/cs193g/bin/submit mp2
- * 
- * This will submit the current directory as your assignment. You can submit
- * as many times as you want, and we will use your last submission.
- */
-
 #include "mp2.h"
 #include "mp2-util.h"
 
@@ -130,8 +114,10 @@ void allocate_device_memory(int num_particles, int num_bins, int bin_size, int n
                             float3 *&d_particles, int *&d_bins,
                             int *&d_knn, int *&d_bin_counters, int *&d_overflow_flag)
 {
-  // TODO: your device memory allocations here
-  // TODO: don't forget to check for errors
+  cudaMalloc((void**)&d_particles, num_particles * sizeof(float3));
+  cudaMalloc((void**)&d_bins, num_bins * bin_size * sizeof(int));
+  cudaMalloc((void**)&d_knn, num_particles * num_neighbors * sizeof(int));
+  cudaMalloc((void**)&d_bin_counters, num_bins * sizeof(int));
 }
 
 
@@ -155,8 +141,10 @@ void deallocate_host_memory(float3 *h_particles, int *h_bins, int *h_knn, int *h
 void deallocate_device_memory(float3 *d_particles, int *d_bins,
                               int *d_knn, int *d_bin_counters, int *d_overflow_flag)
 {
-  // TODO: your device memory deallocations here
-  // TODO: don't forget to check for errors
+  cudaFree(d_particles);
+  cudaFree(d_bins);
+  cudaFree(d_knn);
+  cudaFree(d_bin_counters);
 }
 
 
@@ -307,7 +295,8 @@ int main(void)
   
   // copy input to GPU
   start_timer(&timer);
-  // TODO: your copy of input from host to device here
+  cudaMemcpy(d_particles, h_particles, num_particles * sizeof(float3), cudaMemcpyHostToDevice);
+  cudaMemset(d_bin_counters, 0, num_bins * sizeof(int));
   stop_timer(&timer,"copy to gpu");
   
   start_timer(&timer);
@@ -330,7 +319,9 @@ int main(void)
   
   // download and inspect the result on the host
   start_timer(&timer);
-  // TODO: your copy of results from device to host here
+  cudaMemcpy(h_bin_counters, d_bin_counters, num_bins * sizeof(int), cudaMemcpyDeviceToHost);
+  cudaMemcpy(h_bins, d_bins, num_bins * bin_size * sizeof(float3), cudaMemcpyDeviceToHost);
+  cudaMemcpy(h_knn, d_knn, num_particles * num_neighbors * sizeof(int), cudaMemcpyDeviceToHost);
   check_cuda_error("copy from gpu");
   stop_timer(&timer,"copy back from gpu");
 
