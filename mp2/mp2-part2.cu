@@ -8,28 +8,13 @@
  * shared memory. You should submit this second version of your code. 
  */
  
-/*
- * SUBMISSION INSTRUCTIONS
- * =========================
- * 
- * You can submit the assignment from any of the cluster machines by using
- * our submit script. Th submit script bundles the entire current directory into
- * a submission. Thus, you use it by CDing to a the directory for your assignment,
- * and running:
- * 
- *   > cd *some directory*
- *   > /usr/class/cs193g/bin/submit mp2
- * 
- * This will submit the current directory as your assignment. You can submit
- * as many times as you want, and we will use your last submission.
- */
- 
 #include <cassert>
 
 #include "mp2-util.h"
 
-// TODO enable this to print debugging information
-//const bool print_debug = true;
+#define BLOCK_SIZE 256
+#define NUM_NEIGH 5
+
 const bool print_debug = false;
 
 event_pair timer;
@@ -103,6 +88,61 @@ void host_find_knn(float3 *particles, int *knn, int array_length)
   }
 }
 
+__global__ void device_find_knn(float3 *particles, int *knn, int num_particles, int num_neighbors) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+
+  if (i < num_particles) {
+    float3 p = particles[i];  // the particle whose neighbors we wish to find
+    float neigh_dist[NUM_NEIGH];  // distances of the k neighbors from p
+    int neigh_ids[NUM_NEIGH]; // their ids
+
+    init_list(&neigh_dist[0], num_neighbors, 2.0f); // initialize distances
+    init_list(&neigh_ids[0], num_neighbors, -1);  // initialize ids
+
+    // iterate over all the other particles and find nearest neighbors
+    for (int j = 0; j < num_particles; j++) {
+      if (i != j) {
+        float rsq = dist2(p, particles[j]);
+        insert_list(&neigh_dist[0], &neigh_ids[0], num_neighbors, rsq, j);
+      }
+    }
+
+    // update the global nearest neighbors matrix
+    // please note that no atomic functions are needed as each thread accesses
+    // different elements in this global matrix
+    for (int j = 0; j < num_neighbors; j++) {
+      knn[i*num_neighbors + j] = neigh_ids[j];
+    }
+ }
+}
+
+__global__ void device_find_knn_smem(float3 *particles, int *knn, int num_particles, int num_neighbors) {
+  int i = blockDim.x * blockIdx.x + threadIdx.x;
+
+  if (i < num_particles) {
+    float3 p = particles[i];  // the particle whose neighbors we wish to find
+    __shared__ float neigh_dist[BLOCK_SIZE*NUM_NEIGH];  // distances of the k neighbors from p
+    __shared__ int neigh_ids[BLOCK_SIZE*NUM_NEIGH]; // their ids
+
+    init_list(&neigh_dist[threadIdx.x*num_neighbors], num_neighbors, 2.0f); // initialize distances
+    init_list(&neigh_ids[threadIdx.x*num_neighbors], num_neighbors, -1);  // initialize ids
+
+    // iterate over all the other particles and find nearest neighbors
+    for (int j = 0; j < num_particles; j++) {
+      if (i != j) {
+        float rsq = dist2(p, particles[j]);
+        insert_list(&neigh_dist[threadIdx.x*num_neighbors], &neigh_ids[threadIdx.x*num_neighbors], num_neighbors, rsq, j);
+      }
+    }
+
+    // update the global nearest neighbors matrix
+    // please note that no atomic functions are needed as each thread accesses
+    // different elements in this global matrix
+    for (int j = 0; j < num_neighbors; j++) {
+      knn[i*num_neighbors + j] = neigh_ids[threadIdx.x*num_neighbors + j];
+    }
+ }
+}
 
 void allocate_host_memory(int num_particles, int num_neighbors,
                           float3 *&h_particles, int *&h_knn, int *&h_knn_checker)
@@ -122,10 +162,10 @@ void allocate_host_memory(int num_particles, int num_neighbors,
 
 
 void allocate_device_memory(int num_particles, int num_neighbors,
-                            float3 *&d_particles, int *&d_knn)
-{
-  // TODO: your device memory allocations here
-  // TODO: don't forget to check for errors
+                            float3* &d_particles, int* &d_knn) {
+
+  cudaMalloc((void**)&d_particles, num_particles * sizeof(float3));
+  cudaMalloc((void**)&d_knn, num_particles * num_neighbors * sizeof(int));
 }
 
 
@@ -137,10 +177,9 @@ void deallocate_host_memory(float3 *h_particles, int *h_knn, int *h_knn_checker)
 }
 
 
-void deallocate_device_memory(float3 *d_particles, int *d_knn)
-{
-  // TODO: your device memory deallocations here
-  // TODO: don't forget to check for errors
+void deallocate_device_memory(float3 *d_particles, int *d_knn) {
+  cudaFree(d_particles);
+  cudaFree(d_knn);
 }
 
 
@@ -201,22 +240,22 @@ int main(void)
 
   // copy input to GPU
   start_timer(&timer);
-  // TODO: your copy of input from host to device here
+  cudaMemcpy(d_particles, h_particles, num_particles * sizeof(float3), cudaMemcpyHostToDevice);
   stop_timer(&timer,"copy to gpu");
 
-  start_timer(&timer);  
-  // TODO: your kernel launch which uses local memory here
+  start_timer(&timer);
+  device_find_knn<<<num_particles / BLOCK_SIZE, BLOCK_SIZE >>>(d_particles, d_knn, num_particles, num_neighbors);
   check_cuda_error("brute force knn");
   stop_timer(&timer,"brute force knn");
 
   start_timer(&timer);  
-  // TODO: your kernel launch which uses __shared__ memory here
+  device_find_knn_smem<<<num_particles / BLOCK_SIZE, BLOCK_SIZE >>>(d_particles, d_knn, num_particles, num_neighbors);
   check_cuda_error("shared meme knn");
   stop_timer(&timer,"shared mem knn");
 
   // download and inspect the result on the host
   start_timer(&timer);
-  // TODO: your copy of results from device to host here
+  cudaMemcpy(h_knn, d_knn, num_particles * num_neighbors * sizeof(int), cudaMemcpyDeviceToHost);
   check_cuda_error("copy from gpu");
   stop_timer(&timer,"copy back from gpu memory");
 
