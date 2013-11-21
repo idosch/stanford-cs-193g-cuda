@@ -14,26 +14,6 @@
  * final bins in a second kernel.
  */
 
-
-
-/*
- * SUBMISSION INSTRUCTIONS
- * =========================
- * 
- * You can submit your entire working directory for this assignment 
- * from any of the cluster machines by using our submit script. We want to be able
- * to just run "make" to compile your code.
- * The submit script bundles the entire current directory into
- * a submission. Thus, you use it by CDing to a the directory for your assignment,
- * and running:
- * 
- *   > cd *some directory*
- *   > /usr/class/cs193g/bin/submit mp2
- * 
- * This will submit the current directory as your assignment. You can submit
- * as many times as you want, and we will use your last submission.
- */
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctime>
@@ -42,8 +22,9 @@
 
 #include "mp2-util.h"
 
-// TODO enable this to print debugging information
-//const bool print_debug = true;
+#define BLOCK_SIZE 256
+
+// enable or disable debugging
 const bool print_debug = false;
 
 event_pair timer;
@@ -55,7 +36,7 @@ event_pair timer;
 // Overall there cannot be more than 4B bins, so we can just concatenate the bin
 // indices into a single uint.
 
-unsigned int bin_index(float3 particle, int3 gridding) 
+__host__ __device__ unsigned int bin_index(float3 particle, int3 gridding) 
 {
   unsigned int x_index = (unsigned int)(particle.x * (1 << gridding.x));
   unsigned int y_index = (unsigned int)(particle.y * (1 << gridding.y));
@@ -74,8 +55,9 @@ void host_binning(float3 *particles, int *bins, int *bin_counters, int *overflow
 {
   for(int i=0;i<array_length;i++)
   {
+    // determine particle's index
     unsigned int bin = bin_index(particles[i],gridding);
-    if(bin_counters[bin] < bin_size)
+    if(bin_counters[bin] < bin_size)  // check overflowing
     {
       unsigned int offset = bin_counters[bin];
       // let's not do the whole precrement / postcrement thing...
@@ -131,29 +113,46 @@ bool cross_check_results(int * h_bins, int * h_bins_checker, int * h_bin_counter
   return error;
 }
 
-template
-<typename T>
-__global__ void initialize(T *array,T value, unsigned int array_length)
-{
-  int gid = blockIdx.x * blockDim.x  + threadIdx.x;
-  
-  if(gid < array_length)
-  {
-    array[gid] = value;
+__global__ void binning(float3 *particles, int *bins, int *bin_counters, int3 gridding, int num_particles, int num_bins, int bin_size) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (i < num_particles) {
+    // determine particle's index
+    unsigned int bin = bin_index(particles[i], gridding);
+    int offset = atomicAdd(&bin_counters[bin], 1); 
+    bins[bin*bin_size + offset] = i;
   }
 }
 
-void device_binning(float3 * h_particles, int * h_bins, int * h_bin_counters, int3 gridding, int num_particles, int num_bins, int bin_size)
+void device_binning(float3 *h_particles, int *h_bins, int *h_bin_counters, int3 gridding, int num_particles, int num_bins, int bin_size)
 {
-  // TODO: your implementation here
+  float3 *d_particles;
+  int *d_bins;
+  int *d_bin_counters;
 
-	// How do I call a templated kernel? It's actually easy...
-	// int* array;
-	// int value = 0;
-	// int array_length = 0;
-	// initialize<<<griddim,blockdim>>>(array, value, array_length);
-	// The compiler will figure out the types of your arguments and codegen a implementation for each type you use.
+  // allocate memory for particles, bins and bin counters array of the device
+  cudaMalloc((void**)&d_particles, num_particles * sizeof(float3));
+  cudaMalloc((void**)&d_bins, num_bins * bin_size * sizeof(int));
+  cudaMalloc((void**)&d_bin_counters, num_bins * sizeof(int));
 
+  start_timer(&timer);
+  // copy initial values to the device
+  cudaMemcpy(d_particles, h_particles, num_particles * sizeof(float3), cudaMemcpyHostToDevice);
+  cudaMemset(d_bins, 0, num_bins * bin_size * sizeof(int));
+  cudaMemset(d_bin_counters, 0, num_bins * sizeof(int));
+
+  binning<<<num_particles / BLOCK_SIZE, BLOCK_SIZE>>>(d_particles, d_bins, d_bin_counters, gridding, num_particles, num_bins, bin_size);
+
+  // copy results from device to host
+  cudaMemcpy(h_bins, d_bins, num_bins * bin_size * sizeof(int), cudaMemcpyDeviceToHost);
+  cudaMemcpy(h_bin_counters, d_bin_counters, num_bins * sizeof(int), cudaMemcpyDeviceToHost);
+
+  stop_timer(&timer,"gpu binning");
+
+  // deallocate memory
+  cudaFree(d_particles);
+  cudaFree(d_bins);
+  cudaFree(d_bin_counters);
 }
 
 int main(void)
@@ -236,7 +235,7 @@ int main(void)
   free(h_bins_checker);
   free(h_particles_binids_checker);
   free(h_bin_counters_checker);
- 
+
   return 0;
 }
 
