@@ -19,8 +19,8 @@
 # .profile so that you can compile and run without using this makefile.
 
 NVCCFLAGS	:= -O3 -Xptxas -v 
-NVCC		:= /usr/local/cuda/bin/nvcc
-LD_LIBRARY_PATH	:= /usr/local/cuda/lib64
+NVCC		:= /opt/cuda/bin/nvcc
+LD_LIBRARY_PATH	:= /opt/cuda/lib64
 
 
 all: part1 part2 part3
